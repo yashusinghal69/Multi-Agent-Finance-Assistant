@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 import os
 from typing import Dict, List, Any
@@ -11,50 +12,91 @@ def get_stock_info(symbol: str) -> Dict[str, Any]:
     """
     Get basic stock information for a given symbol
     """
-    
-    stock = yf.Ticker(symbol)
+    try:
+        stock = yf.Ticker(symbol)
+        
         # Try to get current data from history first
-    hist = stock.history(period="1d")
-    
-    if not hist.empty:
-        current_price = hist['Close'].iloc[-1]
-        previous_close = hist['Open'].iloc[-1] 
-        volume = hist['Volume'].iloc[-1]
-    else:
-        current_price = 0
-        previous_close = 0
-        volume = 0
-    
-    # Try to get info
-    info = stock.info if hasattr(stock, 'info') else {}
-    
-    # Calculate change
-    change_percent = 0
-    if previous_close > 0:
-        change_percent = round(((current_price - previous_close) / previous_close) * 100, 2)
-    
-    return {
-        "symbol": symbol,
-        "name": info.get("longName", f"{symbol} Inc."),
-        "current_price": round(float(current_price), 2) if current_price > 0 else info.get("currentPrice", 0),
-        "previous_close": round(float(previous_close), 2) if previous_close > 0 else info.get("previousClose", 0),
-        "change_percent": change_percent,
-        "market_cap": info.get("marketCap", "N/A"),
-        "volume": int(volume) if volume > 0 else info.get("volume", 0),
-        "sector": info.get("sector", "Technology"),
-        "industry": info.get("industry", "Consumer Electronics"),
-        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+        hist = stock.history(period="1d")
+        
+        if hist.empty:
+            # Try longer period
+            hist = stock.history(period="5d")
+        
+        if not hist.empty:
+            current_price = hist['Close'].iloc[-1]
+            previous_close = hist['Open'].iloc[-1] 
+            volume = hist['Volume'].iloc[-1]
+        else:
+            # No historical data available - stock might be delisted or invalid
+            return {
+                "symbol": symbol,
+                "error": f"No price data available for {symbol}. Stock may be delisted or invalid.",
+                "status": "delisted_or_invalid"
+            }
+        
+        # Try to get info
+        info = stock.info if hasattr(stock, 'info') else {}
+        
+        # Validate that we have meaningful data
+        if current_price <= 0 or pd.isna(current_price):
+            return {
+                "symbol": symbol,
+                "error": f"Invalid price data for {symbol}. Stock may be delisted.",
+                "status": "invalid_data"
+            }
+        
+        # Calculate change
+        change_percent = 0
+        if previous_close > 0:
+            change_percent = round(((current_price - previous_close) / previous_close) * 100, 2)
+        
+        return {
+            "symbol": symbol,
+            "name": info.get("longName", f"{symbol} Inc."),
+            "current_price": round(float(current_price), 2),
+            "previous_close": round(float(previous_close), 2) if previous_close > 0 else info.get("previousClose", 0),
+            "change_percent": change_percent,
+            "market_cap": info.get("marketCap", "N/A"),
+            "volume": int(volume) if volume > 0 else info.get("volume", 0),
+            "sector": info.get("sector", "Technology"),
+            "industry": info.get("industry", "Consumer Electronics"),
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "active"
+        }
+    except Exception as e:
+        return {
+            "symbol": symbol,
+            "error": f"Error fetching data for {symbol}: {str(e)}",
+            "status": "error"
+        }
 
 def get_portfolio_data(symbols: List[str]) -> List[Dict[str, Any]]:
     """
     Get portfolio data for multiple symbols
     """
     portfolio_data = []
+    valid_stocks = []
+    invalid_stocks = []
+    
     for symbol in symbols:
         data = get_stock_info(symbol)
-        portfolio_data.append(data)
-    return portfolio_data
+        
+        if "error" in data or data.get("status") in ["delisted_or_invalid", "invalid_data", "error"]:
+            invalid_stocks.append({"symbol": symbol, "reason": data.get("error", "Unknown error")})
+        else:
+            portfolio_data.append(data)
+            valid_stocks.append(symbol)
+    
+    # Add summary information
+    result = {
+        "valid_stocks": portfolio_data,
+        "valid_count": len(valid_stocks),
+        "invalid_stocks": invalid_stocks,
+        "invalid_count": len(invalid_stocks),
+        "total_requested": len(symbols)
+    }
+    
+    return [result]  # Return as list to maintain compatibility
 
 def get_market_overview() -> Dict[str, Any]:
     """
@@ -131,10 +173,12 @@ def analyze_portfolio_risk(symbols: List[str], weights: List[float] = None) -> D
         # Get historical data for portfolio
         portfolio_data = []
         total_value = 0
+        valid_stocks = 0
+        invalid_stocks = []
         
         for i, symbol in enumerate(symbols):
             stock_data = get_stock_info(symbol)
-            if "error" not in stock_data:
+            if "error" not in stock_data and stock_data.get("status") == "active":
                 weighted_value = stock_data["current_price"] * weights[i]
                 total_value += weighted_value
                 portfolio_data.append({
@@ -144,6 +188,18 @@ def analyze_portfolio_risk(symbols: List[str], weights: List[float] = None) -> D
                     "weighted_value": weighted_value,
                     "sector": stock_data["sector"]
                 })
+                valid_stocks += 1
+            else:
+                invalid_stocks.append({
+                    "symbol": symbol,
+                    "error": stock_data.get("error", "Unknown error")
+                })
+        
+        if valid_stocks == 0:
+            return {
+                "error": "No valid stocks found for portfolio analysis",
+                "invalid_stocks": invalid_stocks
+            }
         
         # Calculate sector allocation
         sector_allocation = {}
@@ -156,9 +212,12 @@ def analyze_portfolio_risk(symbols: List[str], weights: List[float] = None) -> D
         
         return {
             "total_portfolio_value": total_value,
-            "stocks": portfolio_data,
+            "valid_stocks": portfolio_data,
+            "valid_stock_count": valid_stocks,
+            "invalid_stocks": invalid_stocks,
+            "invalid_stock_count": len(invalid_stocks),
             "sector_allocation": sector_allocation,
-            "risk_level": "Medium" if len(symbols) > 5 else "High"  # Simple risk assessment
+            "risk_level": "Medium" if valid_stocks > 5 else "High"  # Simple risk assessment
         }
         
     except Exception as e:
@@ -186,8 +245,8 @@ def market_data_tool(query: str) -> str:
         "intel": "INTC",
         "amd": "AMD",
         "oracle": "ORCL",
-        "salesforce": "CRM",
-        "adobe": "ADBE"    }
+        "salesforce": "CRM",        "adobe": "ADBE"
+    }
     
     if "portfolio" in query_lower or "risk" in query_lower:
         # Default tech portfolio for demo
@@ -204,17 +263,31 @@ def market_data_tool(query: str) -> str:
         return f"Sector Performance: {sector_data}"
     
     else:
-        # Extract stock symbols from query
+        # Extract stock symbols from query - be more selective
         words = query.upper().split()
         
-        # Filter out common words that aren't stock symbols
+        # Expanded exclude words list to avoid false positives
         exclude_words = {"THE", "IS", "OF", "AND", "OR", "TO", "IN", "ON", "AT", "FOR", 
                         "WITH", "BY", "FROM", "UP", "ABOUT", "INTO", "THROUGH", "DURING",
                         "BEFORE", "AFTER", "ABOVE", "BELOW", "BETWEEN", "STOCK", "STOCKS",
-                        "TODAY", "PRICE", "WHAT", "HOW", "WHERE", "WHEN", "WHY", "WHO"}
+                        "TODAY", "PRICE", "WHAT", "HOW", "WHERE", "WHEN", "WHY", "WHO",
+                        "THIS", "THAT", "THESE", "THOSE", "SOME", "ANY", "ALL", "EACH",
+                        "EVERY", "BOTH", "EITHER", "NEITHER", "MUCH", "MANY", "MORE",
+                        "MOST", "SUCH", "WHAT", "WHICH", "THAT", "WHO", "WHOM", "WHOSE",
+                        "GUY", "GUYS", "LIKE", "JUST", "ONLY", "ALSO", "EVEN", "STILL",
+                        "VERY", "QUITE", "RATHER", "PRETTY", "REAL", "REALLY", "TRUE",
+                        "FALSE", "GOOD", "BAD", "BEST", "WORST", "FIRST", "LAST", "NEXT",
+                        "SAME", "OTHER", "BOTH", "FEW", "LITTLE", "LESS", "LEAST", "MUCH",
+                        "MORE", "MOST", "ENOUGH", "SEVERAL", "MANY", "STCK", "STOCK"}
         
-        potential_symbols = [word for word in words 
-                           if len(word) <= 5 and word.isalpha() and word not in exclude_words]
+        # More strict filtering - only consider words that could realistically be stock symbols
+        potential_symbols = []
+        for word in words:
+            if (len(word) >= 2 and len(word) <= 5 and 
+                word.isalpha() and 
+                word not in exclude_words and
+                word.isupper()):  # Only consider if already uppercase or explicitly formatted as symbol
+                potential_symbols.append(word)
         
         # Also check for company names
         company_symbols = []
@@ -222,15 +295,20 @@ def market_data_tool(query: str) -> str:
             if company in query_lower:
                 company_symbols.append(symbol)
         
-        # Combine found symbols
-        all_symbols = list(set(potential_symbols + company_symbols))
+        # Look for explicit symbol patterns (e.g., $AAPL, AAPL:, etc.)
+        import re
+        symbol_patterns = re.findall(r'\$([A-Z]{1,5})\b', query.upper())
+        explicit_symbols = [symbol for symbol in symbol_patterns if symbol not in exclude_words]
+        
+        # Combine found symbols, prioritizing explicit symbols and company names
+        all_symbols = list(set(explicit_symbols + company_symbols + potential_symbols))
         
         if all_symbols:
             stock_data = get_portfolio_data(all_symbols[:3])  # Limit to 3 stocks
             return f"Stock Data: {stock_data}"
         else:
             # If no specific stock found but query mentions stock/price, show popular stocks
-            if any(word in query_lower for word in ["stock", "price", "shares"]):
+            if any(word in query_lower for word in ["stock", "price", "shares", "ticker"]):
                 default_stocks = ["AAPL", "MSFT", "GOOGL"]
                 stock_data = get_portfolio_data(default_stocks)
                 return f"Top Tech Stocks: {stock_data}"

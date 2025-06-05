@@ -106,11 +106,11 @@ with st.sidebar:
     
     st.markdown("---")    # TTS Settings
     st.markdown("### 🔊 Voice Output")
-    enable_tts = st.checkbox("Enable Text-to-Speech", value=False)
+    enable_tts = st.checkbox("Enable Text-to-Speech", value=True)
     if enable_tts:
         # Voice selection - only 2 options
         voice_options = list(DEFAULT_VOICES.keys())
-        selected_voice = st.selectbox("Select Voice", voice_options, index=0)
+        selected_voice = st.selectbox("Select Voice", voice_options, index=1, help="Choose a voice for audio responses")
         voice_id = DEFAULT_VOICES[selected_voice]
         
         # Fixed style - always Conversational
@@ -154,140 +154,285 @@ if not groq_api_key:
     st.error("❌ Please set GROQ_API_KEY in your .env file")
     st.stop()
 
-# Main interface
-# st.header("💬 Multi-Modal Input")
+# Main interface - Tabbed Layout
+st.markdown("---")
+
+# Initialize session state
+if 'recording' not in st.session_state:
+    st.session_state.recording = False
+if 'transcription' not in st.session_state:
+    st.session_state.transcription = ""
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'last_audio_hash' not in st.session_state:
+    st.session_state.last_audio_hash = None
 
 # Create tabs for different input methods
-input_tab1, input_tab2 = st.tabs(["🎤 Voice Input", "💬 Text Chat"])
+tab1, tab2 = st.tabs(["🎤 Voice Input & Recording", "💬 Text Chat Interface"])
 
-with input_tab1:
-    st.subheader("Voice Recording & Upload")
+# TAB 1 - Voice Input Section
+with tab1:
+    st.markdown("## 🎤 Voice Input & Recording")
+      # Clear transcription button
+    col_clear, col_space = st.columns([1, 3])
+    with col_clear:
+        if st.button("🗑️ Clear Transcription", help="Clear previous transcription to start fresh"):
+            st.session_state.transcription = ""
     
-    # Initialize session state
-    if 'recording' not in st.session_state:
-        st.session_state.recording = False
-    if 'transcription' not in st.session_state:
-        st.session_state.transcription = ""
-
-    # Voice recording section
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.subheader("🎙️ Record Audio")
-        
-        # Simple audio recorder with automatic timeout
-        audio_value = st.audio_input(
-            "Record your financial query (stops after 5 seconds of silence)",
-            key="audio_input"
-        )
-        
-        if audio_value is not None:
-            st.success("✅ Audio recorded!")
-            
-            # Auto-transcribe when audio is recorded
-            with st.spinner("🔄 Transcribing..."):
-                # Save audio to temp file
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                    temp_file.write(audio_value.read())
-                    temp_file_path = temp_file.name
-                
-                # Transcribe
-                transcription = transcribe_audio_with_groq(temp_file_path)
-                st.session_state.transcription = transcription
-                
-                # Clean up
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
-        
-        # File upload option
-        st.subheader("📁 Upload Audio File")
-        uploaded_file = st.file_uploader(
-            "Choose audio file", 
-            type=['wav', 'mp3', 'm4a']
-        )
-        
-        if uploaded_file is not None:
-            st.audio(uploaded_file)
-            
-            with st.spinner("🔄 Transcribing uploaded file..."):
-                # Save uploaded file
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                    temp_file.write(uploaded_file.read())
-                    temp_file_path = temp_file.name
-                
-                transcription = transcribe_uploaded_audio(temp_file_path)
-                st.session_state.transcription = transcription
-                
-                # Clean up
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
-
-    with col2:
-        st.subheader("📝 Transcription")
-        
-        if st.session_state.transcription:
-            st.info(f"**Transcribed:** {st.session_state.transcription}")            # Edit transcription
-            edited_text = st.text_area(
-                "Edit if needed:",
-                value=st.session_state.transcription,
-                height=100,
-                key="voice_text_edit"
+    st.markdown("---")
+    
+    # Create two columns for voice recording layout
+    voice_col1, voice_col2 = st.columns([1, 1], gap="medium")
+    
+    with voice_col1:
+        # Voice recording card
+        with st.container():
+            st.markdown("""
+            <div style="background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); 
+                        padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <h4 style="color: #ffffff; margin: 0; font-weight: bold;">🎙️ Voice Recording</h4>
+                <p style="color: #ffffff; margin: 5px 0 0 0; opacity: 0.9;">Record your financial query</p>
+            </div>
+            """, unsafe_allow_html=True)
+              # Audio input
+            audio_value = st.audio_input(
+                "🎵 Record your question (stops after 5 seconds of silence)",
+                key="voice_tab_audio_input"
             )            
-            if st.button("🚀 Process Voice Query", type="primary"):
-                process_financial_query(edited_text, enable_tts, voice_id)
-        else:
-            st.info("👆 Record or upload audio to see transcription")
-
-with input_tab2:
-    st.subheader("💬 Text Chat Interface")
+            if audio_value is not None:
+                # Create a hash of the audio data to avoid reprocessing
+                import hashlib
+                audio_data = audio_value.read()
+                audio_hash = hashlib.md5(audio_data).hexdigest()
+                
+                # Only process if this is new audio
+                if audio_hash != st.session_state.last_audio_hash:
+                    st.session_state.last_audio_hash = audio_hash
+                    st.success("✅ Audio recorded successfully!")
+                    
+                    # Auto-transcribe when audio is recorded
+                    with st.spinner("🔄 Transcribing your voice..."):
+                        # Save audio to temp file
+                        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                            temp_file.write(audio_data)
+                            temp_file_path = temp_file.name
+                        
+                        # Transcribe
+                        transcription = transcribe_audio_with_groq(temp_file_path)
+                        st.session_state.transcription = transcription
+                        
+                        # Clean up
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+        
+        # File upload card
+        with st.container():
+            st.markdown("""
+            <div style="background: linear-gradient(90deg, #f093fb 0%, #f5576c 100%); 
+                        padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <h4 style="color: #ffffff; margin: 0; font-weight: bold;">📁 Upload Audio File</h4>
+                <p style="color: #ffffff; margin: 5px 0 0 0; opacity: 0.9;">Choose an existing audio file</p>
+            </div>
+            """, unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(
+                "Choose audio file", 
+                type=['wav', 'mp3', 'm4a'],
+                help="Drag and drop or browse for WAV, MP3, or M4A files",
+                key="voice_tab_file_upload"
+            )            
+            if uploaded_file is not None:
+                # Create a hash of the uploaded file to avoid reprocessing
+                import hashlib
+                file_data = uploaded_file.read()
+                file_hash = hashlib.md5(file_data).hexdigest()
+                
+                # Only process if this is a new file
+                if file_hash != st.session_state.last_audio_hash:
+                    st.session_state.last_audio_hash = file_hash
+                    st.audio(file_data, format="audio/wav")
+                    
+                    with st.spinner("🔄 Processing uploaded audio file..."):
+                        # Save uploaded file
+                        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                            temp_file.write(file_data)
+                            temp_file_path = temp_file.name
+                        
+                        transcription = transcribe_uploaded_audio(temp_file_path)
+                        st.session_state.transcription = transcription
+                        
+                        # Clean up
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
     
-    # Initialize chat history
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []    # Display chat history
+    with voice_col2:
+        # Transcription display and editing
+        if st.session_state.transcription:
+            st.markdown("### 📝 Voice Transcription")
+            
+            # Display transcription in a nice box
+            st.markdown(f"""
+            <div style="background: #f0f8ff; padding: 15px; border-radius: 10px; 
+                        border-left: 4px solid #4CAF50; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <strong style="color: #2c3e50; font-size: 16px;">🗣️ Transcribed Text:</strong><br>
+                <span style="font-size: 16px; color: #34495e; line-height: 1.5;">{st.session_state.transcription}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Edit transcription
+            edited_text = st.text_area(
+                "✏️ Edit transcription if needed:",
+                value=st.session_state.transcription,
+                height=120,
+                key="voice_text_edit",
+                help="Make any corrections to the transcribed text before processing"
+            )
+            
+            # Process button
+            if st.button("🚀 Process Voice Query", type="primary", use_container_width=True):
+                with st.spinner("🤖 Processing your voice query..."):
+                    process_financial_query(edited_text, enable_tts, voice_id)
+        else:
+            st.markdown("""
+            <div style="background: #fff3cd; padding: 30px; border-radius: 10px; 
+                        text-align: center; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h4 style="color: #856404; margin-bottom: 10px;">🎙️ Ready to Listen!</h4>
+                <p style="color: #856404; font-size: 16px; margin: 0;">Record audio or upload a file to see the transcription here</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+# TAB 2 - Text Chat Section
+with tab2:
+    st.markdown("## 💬 Text Chat Interface")
+    
+    # Chat history display
     chat_container = st.container()
     with chat_container:
-        for i, (role, message) in enumerate(st.session_state.chat_history[-5:]):  # Show last 5 messages
-            if role == "user":
-                st.markdown(f"**🧑 You:** {message}")
-            else:
-                # Display the assistant message (already formatted by LLM)
-                st.markdown(f"**🤖 Assistant:** {message}")
-                if enable_tts and voice_id and i == len(st.session_state.chat_history[-5:]) - 1:  # Only TTS the latest response
-                    with st.expander("🔊 Play Audio"):
-                        play_audio_response(message, voice_id)
+        if st.session_state.chat_history:
+            st.markdown("""
+            <div style="background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%); 
+                        padding: 15px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <h4 style="color: #ffffff; margin: 0; font-weight: bold;">💭 Conversation History</h4>
+                <p style="color: #ffffff; margin: 5px 0 0 0; opacity: 0.9;">Your recent chat messages</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display last 5 messages
+            for i, (role, message) in enumerate(st.session_state.chat_history[-5:]):
+                if role == "user":
+                    st.markdown(f"""
+                    <div style="background: #e3f2fd; padding: 12px; border-radius: 10px; 
+                                margin: 10px 0; border-left: 4px solid #2196F3; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <strong style="color: #1565C0; font-size: 16px;">🧑 You:</strong> 
+                        <span style="color: #424242; font-size: 15px;">{message}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style="background: #f1f8e9; padding: 12px; border-radius: 10px; 
+                                margin: 10px 0; border-left: 4px solid #4CAF50; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <strong style="color: #2E7D32; font-size: 16px;">🤖 Assistant:</strong> 
+                        <span style="color: #424242; font-size: 15px;">{message}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # TTS for latest response only
+                    if enable_tts and voice_id and i == len(st.session_state.chat_history[-5:]) - 1:
+                        with st.expander("🔊 Play Audio Response"):
+                            play_audio_response(message, voice_id)
+        else:
+            st.markdown("""
+            <div style="background: #f8f9fa; padding: 30px; border-radius: 15px; 
+                        text-align: center; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h4 style="color: #495057; margin-bottom: 10px;">💬 Start Your Conversation</h4>
+                <p style="color: #6c757d; font-size: 16px; margin: 0;">Your chat history will appear here once you start asking questions</p>
+            </div>
+            """, unsafe_allow_html=True)
     
-    # Text input
+    st.markdown("---")
+    
+    # Text input form
+    st.markdown("### ✍️ Type Your Message")
     with st.form(key="text_chat_form", clear_on_submit=True):
         user_input = st.text_input(
-            "💬 Ask your financial question:",
+            "💭 Ask your financial question:",
             placeholder="e.g., What's Apple's stock price today? Latest Tesla news? Market sentiment?",
-            key="text_input"
+            key="text_input",
+            help="Type your question and press Enter or click Send"
         )
-        col_submit, col_clear = st.columns([1, 1])
+        
+        # Form buttons
+        col_submit, col_clear = st.columns([2, 1])
         
         with col_submit:
-            submit_button = st.form_submit_button("🚀 Send", type="primary")
+            submit_button = st.form_submit_button("🚀 Send Message", type="primary", use_container_width=True)
         
         with col_clear:
-            clear_button = st.form_submit_button("🗑️ Clear History")
+            clear_button = st.form_submit_button("🗑️ Clear History", use_container_width=True)
     
+    # Handle form submissions
     if submit_button and user_input:
         # Add user message to history
-        st.session_state.chat_history.append(("user", user_input))        # Process query
-        with st.spinner("🤖 AI is thinking..."):
+        st.session_state.chat_history.append(("user", user_input))
+        
+        # Process query
+        with st.spinner("🤖 AI agents are analyzing your question..."):
             response = process_financial_query(user_input, enable_tts, voice_id, return_only=True)
             
         # Add AI response to history
         st.session_state.chat_history.append(("assistant", response))
-          # Rerun to update display
+        
+        # Rerun to update display
         st.rerun()
     
     if clear_button:
         st.session_state.chat_history = []
+        st.success("💫 Chat history cleared!")
         st.rerun()
+
+# Bottom section - Quick actions and tips
+st.markdown("---")
+st.markdown("### 💡 Quick Tips & Actions")
+
+tip_col1, tip_col2, tip_col3 = st.columns(3)
+
+with tip_col1:
+    st.markdown("""
+    <div style="background: #fff3e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h5 style="color: #ef6c00; margin-bottom: 10px; font-weight: bold;">🎯 Pro Tips</h5>
+        <p style="font-size: 14px; color: #bf360c; line-height: 1.6; margin: 0;">
+        • Upload documents for context<br>
+        • Use voice for hands-free analysis<br>
+        • Enable TTS for audio responses
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with tip_col2:
+    st.markdown("""
+    <div style="background: #f3e5f5; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h5 style="color: #7b1fa2; margin-bottom: 10px; font-weight: bold;">📊 Ask About</h5>
+        <p style="font-size: 14px; color: #4a148c; line-height: 1.6; margin: 0;">
+        • Stock prices & trends<br>
+        • Market news & analysis<br>
+        • Portfolio insights
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with tip_col3:
+    st.markdown("""
+    <div style="background: #e8f5e8; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h5 style="color: #2e7d32; margin-bottom: 10px; font-weight: bold;">🔧 Settings</h5>
+        <p style="font-size: 14px; color: #1b5e20; line-height: 1.6; margin: 0;">
+        • Check sidebar for documents<br>
+        • Configure voice settings<br>
+        • Monitor API status
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
  
