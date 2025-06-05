@@ -1,0 +1,12 @@
+.env
+.env.example
+.env.local
+.env.staging
+.venv
+**/__pycache__/
+__pycache__/
+ *.py[cod]
+
+*.pyc
+.git
+__pycache__
