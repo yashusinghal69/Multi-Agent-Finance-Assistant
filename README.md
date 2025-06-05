@@ -31,7 +31,7 @@ A voice-enabled financial analysis system that combines multiple AI agents to de
 1. **Clone and setup:**
 
 ```bash
-git clone [<repository-url>](https://github.com/yashusinghal69/Multi-Agent-Finance-Assistant.git)
+git clone https://github.com/yashusinghal69/Multi-Agent-Finance-Assistant.git
 cd "Multi Agent Finance Assistant"
 ```
 
